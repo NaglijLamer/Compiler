@@ -19,6 +19,7 @@ import Prelude
 import Control.Monad
 import Control.Applicative
 import Text.Parsec
+import Text.ParserCombinators.Parsec
 -- some another imports
 
 expressionParser :: CharParser () String
