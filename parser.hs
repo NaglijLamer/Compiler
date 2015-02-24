@@ -127,7 +127,8 @@ whileLoopParser :: CharParser () Statement
 whileLoopParser = WhileLoop <$> (reserv "while" *> paren expressionParser) <*> brace bodyParser
 
 forLoopParser :: CharParser () Statement
-forLoopParser = reserv "for" *> paren (ForLoop <$> nameParser <* reserv "in" <*> expressionParser <* whiteSpaces <* string ".." <* whiteSpaces <*> expressionParser) <*> brace bodyParser
+--forLoopParser = reserv "for" *> paren (ForLoop <$> nameParser <* reserv "in" <*> expressionParser <* whiteSpaces <* string ".." <* whiteSpaces <*> expressionParser) <*> brace bodyParser
+forLoopParser = reserv "for" *> paren (ForLoop <$> nameParser <* reserv "in" <*> (Ident <$> nameParser <|> IntNumb <$> nat) <* string ".." <* whiteSpaces <*> (Ident <$> nameParser <|> IntNumb <$> nat)) <*> brace bodyParser
 
 ifElseParser :: CharParser () Statement
 ifElseParser = IfElse <$> (reserv "if" *> paren expressionParser) <*> brace bodyParser <*> optionMaybe (reserv "else" *> brace bodyParser)
