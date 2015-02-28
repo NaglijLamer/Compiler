@@ -3,7 +3,11 @@ module Parser
 (	
 	mainParser
 ,	bodyParser
-,	main
+,	Expression (..)
+,	Statement (..)
+,	Binar (..)
+,	Unar (..)
+,	Name, Type, TypeF
 ) where
 
 import Prelude
