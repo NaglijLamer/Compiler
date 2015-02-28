@@ -10,7 +10,7 @@ import Text.ParserCombinators.Parsec
 import qualified Data.Map.Strict as Map
 import Control.Lens
 
-data ByteCodeCommand = DLOAD Double | ILOAD Integer | SLOAD Integer
+data ByteCodeCommand = DLOAD Double | ILOAD Int | SLOAD Int
 			| DLOAD0 | ILOAD0 | SLOAD0
 			| DLOAD1 | ILOAD1 | DLOADM1 | ILOADM1
 			| DADD | IADD | DSUB | ISUB
@@ -104,20 +104,22 @@ findVar :: SubBlock -> Name -> Maybe (Int, Type)
 findVar (blc, path) nm = case (getBlock (blc, path)) of
 	Just (IFLoop _) -> findVar (blc, (init path)) nm
 	Just (Funct _ _ _ _ _ vm _ _ ) -> Map.lookup nm vm
-	Nothing -> error "Unexpected error"
+	--Nothing -> error "Unexpected error"
 
 addVar :: SubBlock -> Name -> Type -> Block
 addVar (blc, path) nm tp = case (getBlock (blc, path)) of
 	Just (IFLoop _) -> addVar (blc, (init path)) nm tp
 	Just (Funct _ _ _ _ _ _ _ _) -> changeTreeNewVar blc path nm tp
-	Nothing -> error "Unexpected error"
+	--Nothing -> error "Unexpected error"
 
 getVarInfo :: SubBlock -> Name -> Maybe (Name, Id, Type, Id)
 getVarInfo (blc, path) nm = case (getBlock (blc, path)) of
-	Nothing -> error ("Attempt to use variable " ++ nm ++ ", which does not exist")
+	--Nothing -> error ("Attempt to use variable " ++ nm ++ ", which does not exist")
 	Just (IFLoop _) -> getVarInfo (blc, init path) nm
-	Just (Funct _ fid _ _ _ vm _ _) -> case (Map.lookup nm vm) of
-		Nothing -> getVarInfo (blc, init path) nm
+	Just (Funct fnm fid _ _ _ vm _ _) -> case (Map.lookup nm vm) of
+		Nothing -> if fnm == "root"
+			then error ("Attempt to use variable " ++ nm ++ " , which does not exist")
+			else getVarInfo (blc, init path) nm
 		Just (vid, vtp) -> return (nm, fid, vtp, vid)
 
 getCurrentFid :: SubBlock -> Id
@@ -126,9 +128,42 @@ getCurrentFid (blc, path) = case (getBlock (blc, path)) of
 	Just (IFLoop _) -> getCurrentFid (blc, init path)
 	Just (Funct _ fid _ _ _ _ _ _) -> fid
 
+getStringId :: String -> ConstMap -> Id
+getStringId s cm = case (Map.lookup s cm) of
+	Nothing -> error ("Can't find this string. How it's possible?")
+	Just x -> x
+
+loadVar :: Maybe (Name, Id, Type, Id) -> SubBlock -> (Block, Type)
+loadVar (Just (nm, fid, vtp, vid)) (blc, path) = case (getBlock (blc, path)) of
+	Just (IFLoop _) -> loadVar (Just (nm, fid, vtp, vid)) (blc, init path)
+	Just (Funct _ cfid _ _ _ _ _ _) -> if cfid == fid
+		then case vtp of
+			"double" -> case vid of
+				0 -> ((changeTreeNewBC blc path [(LOADDVAR0)]), "double")
+				1 -> ((changeTreeNewBC blc path [(LOADDVAR1)]), "double")
+				2 -> ((changeTreeNewBC blc path [(LOADDVAR2)]), "double")
+				3 -> ((changeTreeNewBC blc path [(LOADDVAR3)]), "double")
+				_ -> ((changeTreeNewBC blc path [(LOADDVAR vid)]), "double")
+			"int" -> case vid of
+				0 -> ((changeTreeNewBC blc path [(LOADIVAR0)]), "int")	
+				1 -> ((changeTreeNewBC blc path [(LOADIVAR1)]), "int")
+				2 -> ((changeTreeNewBC blc path [(LOADIVAR2)]), "int")
+				3 -> ((changeTreeNewBC blc path [(LOADIVAR3)]), "int")
+				_ -> ((changeTreeNewBC blc path [(LOADIVAR vid)]), "int")
+			"string" -> case vid of
+				0 -> ((changeTreeNewBC blc path [(LOADSVAR0)]), "string")
+				1 -> ((changeTreeNewBC blc path [(LOADSVAR1)]), "string")
+				2 -> ((changeTreeNewBC blc path [(LOADSVAR2)]), "string")
+				3 -> ((changeTreeNewBC blc path [(LOADSVAR3)]), "string")
+				_ -> ((changeTreeNewBC blc path [(LOADSVAR vid)]), "string")
+		else case vtp of
+			"double" -> ((changeTreeNewBC blc path [(LOADCTXDVAR fid vid)]), "double")
+			"int" -> ((changeTreeNewBC blc path [(LOADCTXIVAR fid vid)]), "int")
+			"string" -> ((changeTreeNewBC blc path [(LOADCTXSVAR fid vid)]), "string")
+
 assignmentToVar :: (Block, Type) -> [Int] -> Maybe (Name, Id, Type, Id) -> Block
 assignmentToVar (blc, tps) path (Just (nm, fid, vtp, vid)) = case (getBlock (blc, path)) of
-	Nothing -> error "Unexpected error"
+	--Nothing -> error "Unexpected error"
 	Just (IFLoop _) -> assignmentToVar (blc, tps) (init path) (Just (nm, fid, vtp, vid))
 	Just (Funct _ cfid _ _ bcc _ _ _) -> if cfid == fid
 		then if tps == vtp
@@ -211,9 +246,9 @@ assignmentTranslator blc path cf cm nm expr = assignmentToVar (expressionTransla
 
 expressionTranslator :: Block -> [Int] -> ConstMap -> Expression -> (Block, Type)
 expressionTranslator blc path cm expr = case expr of
-	--Ident nm ->
-	--Str s ->
-	IntNumb inumb -> ((changeTreeNewBC blc path [(ILOAD inumb)]), "int")
+	Ident nm -> (loadVar (getVarInfo (blc,path) nm) (blc, path))
+	Str s -> ((changeTreeNewBC blc path [(SLOAD (getStringId s cm))]), "string")
+	IntNumb inumb -> ((changeTreeNewBC blc path [(ILOAD (fromIntegral(inumb)))]), "int")
 	FloatNumb fnumb -> ((changeTreeNewBC blc path [(DLOAD fnumb)]), "double")
 	-- FCall fname args -> case args of
 	--UnarExpr un subexpr ->
