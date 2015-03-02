@@ -65,6 +65,21 @@ type TypeF = String
 data Val = N Name | I Int deriving (Show)
 data Unar = Neg | Not deriving (Show)
 data Binar =  And | Or | Eq | Gt | Lw | Gte | Lwe | Neq | Sum | Sub | Mult | Div | Mod deriving (Show)
+instance Eq (Binar) where
+	Sum == Sum = True
+	Sub == Sub = True
+	Mult == Mult = True
+	Div == Div = True
+	Mod == Mod = True
+	Eq == Eq = True
+	Neq == Neq = True
+	Lw == Lw = True
+	Gt == Gt = True
+	Lwe == Lwe = True
+	Gte == Gte = True
+	And == And = True
+	Or == Or = True
+	_ == _ = False
 data Expression = UnarExpr Unar Expression
 		| BinaryExpr Binar Expression Expression
 		| Ident Name

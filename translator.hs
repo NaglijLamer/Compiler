@@ -224,6 +224,69 @@ assignmentToVar (blc, tps) path (Just (nm, fid, vtp, vid)) = case (getBlock (blc
 				("int", "string") -> changeTreeNewBC blc path [(S2I), (STORECTXIVAR fid vid)]
 				(_,_) -> error ("Attempt to cast type " ++ tps ++ " to type " ++ vtp ++ " in assignment to variable " ++ nm)
 
+notOperation :: Type -> [ByteCodeCommand]
+notOperation "int" = [(ILOAD0), (IFICMPNE 6), (POP), (POP), (ILOAD1), (JA 2), (SWAP), (POP)]
+--Are we really need this?..
+notOperation "double" = [(DLOAD0), (DCMP), (SWAP), (POP), (SWAP), (POP), (ILOAD0), (IFICMPNE 6), (POP), (POP), (DLOAD1), (JA 3), (POP), (POP), (DLOAD0)]
+
+unarOperation :: Unar -> (Block, Type) -> [Int] -> (Block, Type)
+unarOperation _ (_, "string") _ = error ("Attempt to use unary operation with string value")
+unarOperation Not (blc, tp) path = ((changeTreeNewBC blc path (notOperation tp)), tp)
+unarOperation Neg (blc, "int") path = ((changeTreeNewBC blc path [(INEG)]), "int")
+unarOperation Neg (blc, "double") path = ((changeTreeNewBC blc path [(DNEG)]), "double")
+
+binarOperationPrev :: Binar -> ConstMap -> Expression -> (Block, Type) -> [Int] -> (Block, Type)
+binarOperationPrev bin cm subexpr1 (blc, tp) path = binaryOperation bin (expressionTranslator blc path cm subexpr1) tp path
+
+binaryOperation :: Binar -> (Block, Type) -> Type -> [Int] -> (Block, Type)
+binaryOperation bin (blc, tp1) tp2 path = ((changeTreeNewBC blc path (binarBC bin tp1 tp2)), (binarBCType bin tp1 tp2))
+
+binarBC :: Binar -> Type -> Type -> [ByteCodeCommand]
+binarBC _ "string" _ = error ("Attempt to use binary operator with string value")
+binarBC _ _ "string" = error ("Attempt to use binary operator with string value")
+binarBC Mod tp1 tp2 = if (tp1 /= "int" || tp2 /= "int")
+	then error ("Attempt to use Mod operation with double variable")
+	else [IMOD]
+binarBC bin tp1 tp2 = case (tp1, tp2) of
+	--("int", "int") -> ((changeTreeNewBC blc path (binarOpBC "int" bin)), "int")
+	("int", "int") -> binarOpBC "int" bin
+	("int", "double") -> ([(I2D)] ++ (binarOpBC "double" bin))
+	("double", "int") -> ([(SWAP), (I2D), (SWAP)] ++ (binarOpBC "double" bin))
+	("double", "double") -> binarOpBC "double" bin
+
+binarOpBC :: Type -> Binar -> [ByteCodeCommand]
+binarOpBC "int" Sum = [IADD]
+binarOpBC "double" Sum = [DADD] 
+binarOpBC "int" Sub = [ISUB]
+binarOpBC "double" Sub = [DSUB]
+binarOpBC "int" Mult = [IMUL]
+binarOpBC "double" Mult = [DMUL]
+binarOpBC "int" Div = [IDIV]
+binarOpBC "double" Div = [DDIV]
+binarOpBC "int" Eq = [(IFICMPE 4), (ILOAD 0), (JA 1), (ILOAD1), (SWAP), (POP), (SWAP), (POP)]
+binarOpBC "double" Eq = [(DCMP), (SWAP), (POP), (SWAP), (POP), (ILOAD0), (IFICMPNE 6), (POP), (POP), (ILOAD1), (JA 2), (SWAP), (POP)]
+binarOpBC "int" Neq = [(IFICMPNE 4), (ILOAD0), (JA 1), (ILOAD1), (SWAP), (POP), (SWAP), (POP)]
+binarOpBC "double" Neq = [(DCMP), (SWAP), (POP), (SWAP), (POP), (ILOAD0), (IFICMPE 6), (POP), (POP), (ILOAD1), (JA 1), (POP)]
+binarOpBC "int" Gt = [(IFICMPG 4), (ILOAD0), (JA 1), (ILOAD1), (SWAP), (POP), (SWAP), (POP)]
+binarOpBC "double" Gt = [(DCMP), (SWAP), (POP), (SWAP), (POP), (ILOAD1), (IFICMPE 6), (POP), (POP), (ILOAD0), (JA 1), (POP)]
+binarOpBC "int" Lw = [(IFICMPL 4), (ILOAD0), (JA 1), (ILOAD1), (SWAP), (POP), (SWAP), (POP)]
+binarOpBC "double" Lw = [(DCMP), (SWAP), (POP), (SWAP), (POP), (ILOADM1), (IFICMPE 6), (POP), (POP), (ILOAD0), (JA 3), (POP), (POP), (ILOAD1)]
+binarOpBC "int" Gte = [(IFICMPGE 4), (ILOAD0), (JA 1), (ILOAD1), (SWAP), (POP), (SWAP), (POP)]
+binarOpBC "double" Gte = [(DCMP), (SWAP), (POP), (SWAP), (POP), (ILOADM1), (IFICMPE 6), (POP), (POP), (ILOAD1), (JA 3), (POP), (POP), (ILOAD0)]
+binarOpBC "int" Lwe = [(IFICMPLE 4), (ILOAD0), (JA 1), (ILOAD1), (SWAP), (POP), (SWAP), (POP)]
+binarOpBC "double" Lwe = [(DCMP), (SWAP), (POP), (SWAP), (POP), (ILOAD1), (IFICMPE 6), (POP), (POP), (ILOAD0), (JA 2), (SWAP), (POP)]
+binarOpBC "int" And = [IAAND]
+binarOpBC "double" And = [(DLOAD0), (DCMP), (ILOAD0), (IFICMPE 23), (POP), (POP), (SWAP), (POP), (DCMP), (ILOAD0), (IFICMPE 9), (POP), (POP), (POP), (POP), (ILOAD1), (JA 6), (POP), (POP), (POP), (POP), (POP), (ILOAD0)]
+binarOpBC "int" Or = [IAOR]
+binarOpBC "double" Or = [(DLOAD0), (DCMP), (ILOAD0), (IFICMPNE 23), (POP), (POP), (SWAP), (POP), (DCMP), (ILOAD0), (IFICMPNE 9), (POP), (POP), (POP), (POP), (ILOAD1), (JA 6), (POP), (POP), (POP), (POP), (POP), (ILOAD0)]
+
+binarBCType :: Binar -> Type -> Type -> Type
+binarBCType _ "int" "int" = "int"
+binarBCType Mod _ _ = error ("")
+binarBCType bin _ _ = if (bin == Sum || bin == Sub || bin == Mult || bin == Div)
+	then "double"
+	else "int"
+
 changeTreeNewVar :: Block -> [Int] -> Name -> Type -> Block
 changeTreeNewVar blc [] nm tp = Funct (name blc) (idf blc) (retType blc) (tP blc) (byteCode blc) (Map.insert nm ((Map.size (varMap blc)), tp) (varMap blc)) ((maxVar blc)+1) (bl blc)
 changeTreeNewVar blc (p:ath) nm tp = case blc of
@@ -251,6 +314,5 @@ expressionTranslator blc path cm expr = case expr of
 	IntNumb inumb -> ((changeTreeNewBC blc path [(ILOAD (fromIntegral(inumb)))]), "int")
 	FloatNumb fnumb -> ((changeTreeNewBC blc path [(DLOAD fnumb)]), "double")
 	-- FCall fname args -> case args of
-	--UnarExpr un subexpr ->
-	--BinarExpr bin subexpr1 subexpr2 ->
-
+	UnarExpr un subexpr -> unarOperation un (expressionTranslator blc path cm subexpr) path
+	BinaryExpr bin subexpr1 subexpr2 -> binarOperationPrev bin cm subexpr1 (expressionTranslator blc path cm subexpr2) path
