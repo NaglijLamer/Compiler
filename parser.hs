@@ -91,7 +91,7 @@ data Expression = UnarExpr Unar Expression
 data Statement = Declaration Type Name
 		| Assignment Name Expression
 		| PrintSt (Maybe [Expression])
-		| ReturnSt Expression
+		| ReturnSt (Maybe Expression)
 		| FunctionCall Name (Maybe [Expression])
 		| WhileLoop Expression [Statement]
 		| ForLoop Name Expression Expression [Statement]
@@ -137,7 +137,7 @@ printParser :: CharParser () Statement
 printParser = PrintSt <$> (reserv "print" *> paren cArgsParser) <* sem
 
 returnParser :: CharParser () Statement
-returnParser = ReturnSt <$> (reserv "return" *> expressionParser) <* whiteSpaces <* sem
+returnParser = ReturnSt <$> (reserv "return" *> (optionMaybe expressionParser)) <* whiteSpaces <* sem
 
 fCallParser :: CharParser () Expression 
 fCallParser = FCall <$> nameParser <*> paren (cArgsParser)
