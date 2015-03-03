@@ -9,7 +9,9 @@ import Parser
 import Text.ParserCombinators.Parsec
 import qualified Data.Map.Strict as Map
 import Data.List
+import Data.Maybe
 import Control.Lens
+import Control.Applicative
 
 --Data type for byte code commands.
 data ByteCodeCommand = DLOAD Double | ILOAD Int | SLOAD Int
@@ -49,7 +51,9 @@ main =
 			Right r -> do {
 				mapM_ print r
 			;	mapM_ print (Map.toList((varMap (fst(root (rootInitFunction r)))))) 
-			;	mapM_ print (byteCode(fst(root(rootInitFunction r)))) }}
+			;	mapM_ print (byteCode(fst(root(rootInitFunction r))))
+			; 	mapM_ print (Map.toList((varMap (bl(fst(root(rootInitFunction r))) !! 0))))
+			;	mapM_ print (byteCode(bl(fst(root(rootInitFunction r))) !! 0)) }}
 
 type RetType = String
 type Id = Int
@@ -111,6 +115,40 @@ bodyFunctTranslator :: Program -> Program
 bodyFunctTranslator (Program (rt, path) cf cm []) = Program (rt, path) cf cm []
 bodyFunctTranslator (Program (rt, path) cf cm ((Declaration tp nm):xs)) = bodyFunctTranslator (Program ((declarationTranslator tp nm rt path), path) cf cm xs)
 bodyFunctTranslator (Program (rt, path) cf cm ((Assignment nm expr):xs)) = bodyFunctTranslator (Program ((assignmentTranslator rt path cf cm nm expr), path) cf cm xs)
+--For native function.
+--bodyFunctTranslator (Program (rt, path) cf cm ((Function rtp nm args (Left natnm)):xs)) =
+bodyFunctTranslator (Program (rt, path) cf cm stm@((Function rtp nm args (Right body)):xs)) = bodyFunctTranslator (functionHeadTranslator (Program (rt, path) cf cm stm) (newPath (getBlock (rt, path)) path))
+
+--Translator for function. Create new Funct and start bodyFunctTranslator.
+functionHeadTranslator :: Program -> [Int] -> Program
+functionHeadTranslator (Program (blc, path) cf cm ((Function rtp nm Nothing (Right body)):xs)) newpath = retF (bodyFunctTranslator (Program ((addFunction (blc, path) nm (Funct nm cf rtp Nothing [] Map.empty 0 [])), newpath) (cf + 1) cm body)) path xs
+functionHeadTranslator (Program (blc, path) cf cm ((Function rtp nm (Just tp) (Right body)):xs)) newpath = retF (bodyFunctTranslator (Program ((loadVarArgs ((addFunction (blc, path) nm (Funct nm cf rtp (loadTypes tp (Just []) ) [] Map.empty 0 [])), newpath) tp), newpath) (cf + 1) cm body)) path xs
+
+--Auxiliary function. Restore old path after translating of subfunction.
+retF:: Program -> [Int] -> [Statement] -> Program
+retF (Program (blc, opath) cf cm oast) npath nast = Program (blc, npath) cf cm nast
+
+--Auxiliary function. Returns path to new subfunction.
+newPath :: Maybe Block -> [Int] -> [Int]
+newPath Nothing _ = error ("Unexpected error")
+newPath (Just blc) path = path ++ [length (bl blc)]
+
+--Adding new function.
+addFunction :: SubBlock -> Name -> Block -> Block
+addFunction (blc, path) nm func = case (getFunct (blc, path) nm) of
+	Nothing -> changeTreeNewFunct blc path func
+	Just _ -> error ("Function with name " ++ nm ++ " is already defined in this context")
+
+--Auxiliary function. Returns list of arguments type.
+loadTypes :: [Statement] -> (Maybe [Type]) -> (Maybe [Type])
+loadTypes [] (Just []) = Nothing
+loadTypes [] tplist = tplist 
+loadTypes ((Declaration tp _) :declor) tplist = loadTypes declor ((++[tp]) <$> tplist)
+
+--Auxiliary function. Create arg variables in new function.
+loadVarArgs :: SubBlock -> [Statement] -> Block
+loadVarArgs (blc, path) ((Declaration tp nm):declor) = loadVarArgs ((declarationTranslator tp nm blc path), path) declor
+loadVarArgs (blc, path) _ = blc
 
 --Function for searching variable in current function. Returns information about variable.
 findVar :: SubBlock -> Name -> Maybe (Int, Type)
@@ -155,7 +193,7 @@ isNeededFunct :: Name -> Block -> Bool
 isNeededFunct nm (IFLoop _) = False
 isNeededFunct nm func = ((name func) == nm)
 
---Get function by its id. Function must be a child of current function or existing in its parents context.
+--Get function by its name. Function must be a child of current function or existing in its parents context.
 getFunct :: SubBlock -> Name -> Maybe Block
 getFunct (blc, []) nm = find (isNeededFunct nm) (bl blc)
 getFunct (blc, path) nm = case (getBlock (blc, path)) of
@@ -165,14 +203,22 @@ getFunct (blc, path) nm = case (getBlock (blc, path)) of
 	Nothing -> error ("Unexpected error")
 
 --Auxiliary function. When we load args of function - we need to check type of args. For function loadArgs.
-checkTypeOfArg :: (Block, Type) -> Type -> Name -> Block
-checkTypeOfArg (blc, acttp) ftp nm = if (acttp == ftp)
+checkTypeOfArg :: (Block, Type) -> [Int] -> Type -> Name -> Block
+checkTypeOfArg (blc, acttp) path ftp nm = if (acttp == ftp)
 	then blc
-	else error ("Attempt to call function " ++ nm ++ " with argument of type " ++ acttp ++ " instead of type " ++ ftp)
+	else case (acttp, ftp) of
+		("int", "double") -> changeTreeNewBC blc path [I2D]
+		("double", "int") -> changeTreeNewBC blc path [D2I]
+		("string", "int") -> changeTreeNewBC blc path [S2I]
+		("string", "double") -> changeTreeNewBC blc path [S2I, I2D]
+		(_, _) -> error ("Attempt to call function " ++ nm ++ " with argument of type " ++ acttp ++ " instead of type " ++ ftp)
 
 --Loading arguments, when we call some function.
 loadArgs :: SubBlock -> [Type] -> [Expression] -> ConstMap -> Name -> Block
-loadArgs (blc, path) (a:rgtp) (e:xpr) cm nm = loadArgs ((checkTypeOfArg (expressionTranslator blc path cm e) a nm), path) rgtp xpr cm nm
+loadArgs (blc, path) [] [] _ nm = blc
+loadArgs _ [] expr _ nm = error ("Too many arguments in call of function " ++ nm)
+loadArgs _ argtp [] _ nm = error ("Too few arguments in call of function " ++ nm)
+loadArgs (blc, path) (a:rgtp) (e:xpr) cm nm = loadArgs ((checkTypeOfArg (expressionTranslator blc path cm e) path a nm), path) rgtp xpr cm nm
 
 --Function for translating of call function as expression
 callFunctionExprTranslator :: (Maybe Block) -> (Maybe [Expression]) -> Block -> [Int] -> ConstMap -> Name -> (Block, Type)
@@ -359,6 +405,15 @@ changeTreeNewBC blc [] bcc = Funct (name blc) (idf blc) (retType blc) (tP blc) (
 changeTreeNewBC blc (p:ath) bcc = case blc of
 	(IFLoop blc2) -> IFLoop (set (element p) (changeTreeNewBC (blc2 !! p) ath bcc) blc2)
 	(Funct n i r t bc vm mv blc3) -> Funct n i r t bc vm mv (set (element p) (changeTreeNewBC (blc3 !! p) ath bcc) blc3)
+
+--Adding function to current function subblocks. Returns new tree.
+changeTreeNewFunct :: Block -> [Int] -> Block -> Block
+changeTreeNewFunct rt [] blc = case rt of
+	(IFLoop blc2) -> (IFLoop (blc2 ++ [blc]))
+	_ -> Funct (name rt) (idf rt) (retType rt) (tP rt) (byteCode rt) (varMap rt) (maxVar rt) ((bl rt) ++ [blc])
+changeTreeNewFunct rt (p:ath) blc = case rt of
+	(IFLoop blc2) -> IFLoop (set (element p) (changeTreeNewFunct (blc2 !! p) ath blc) blc2)
+	(Funct n i r t bc vm mv blc3) -> Funct n i r t bc vm mv (set (element p) (changeTreeNewFunct (blc3 !! p) ath blc) blc3)
 
 --Translator for declarations.
 declarationTranslator :: Type -> Name -> Block -> [Int] -> Block
