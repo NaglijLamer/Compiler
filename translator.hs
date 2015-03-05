@@ -37,7 +37,7 @@ data ByteCodeCommand = DLOAD Double | ILOAD Int | SLOAD Int
 			| DCMP | ICMP | JA Int | IFICMPNE Int
 			| IFICMPE Int | IFICMPG Int | IFICMPGE Int
 			| IFICMPL Int | IFICMPLE Int | DUMP
-			| CALL Int | CALLNATIVE Int | RETURN | BREAK deriving Show
+			| CALL Int | CALLNATIVE Int | RETURN | BREAK | STOP | INVALID deriving Show
 
 --mainTranslator :: [Statement] -> (Either Error ([ByteCodeCommand], Header)
 --mainTranslator = 
@@ -50,8 +50,10 @@ main =
 			;	print e }
 			Right r -> do {
 				mapM_ print r
+			;	print (maxVar(fst(root(rootInitFunction r))))
 			;	mapM_ print (Map.toList((varMap (fst(root (rootInitFunction r)))))) 
 			;	mapM_ print (byteCode(fst(root(rootInitFunction r))))
+			;	print (maxVar(bl(fst(root(rootInitFunction r))) !! 0))
 			; 	mapM_ print (Map.toList((varMap (bl(fst(root(rootInitFunction r))) !! 0))))
 			;	mapM_ print (byteCode(bl(fst(root(rootInitFunction r))) !! 0)) }}
 
@@ -111,13 +113,117 @@ rootInitFunction st = bodyFunctTranslator (Program ((Funct "0root" 0 "void" Noth
 
 --Translator for function body.
 bodyFunctTranslator :: Program -> Program
--- I'm not sure that this branch must work so. Test version, cause empty st means the end of function/block. But this is noce
-bodyFunctTranslator (Program (rt, path) cf cm []) = Program (rt, path) cf cm []
+--bodyFunctTranslator (Program (rt, path) cf cm []) = Program (rt, path) cf cm []
+bodyFunctTranslator (Program (rt, []) cf cm []) = Program ((changeTreeNewBC rt [] [STOP]), []) cf cm []
+bodyFunctTranslator (Program (rt, path) cf cm []) = Program ((isVoidFunct(rt, path)), path) cf cm []
 bodyFunctTranslator (Program (rt, path) cf cm ((Declaration tp nm):xs)) = bodyFunctTranslator (Program ((declarationTranslator tp nm rt path), path) cf cm xs)
 bodyFunctTranslator (Program (rt, path) cf cm ((Assignment nm expr):xs)) = bodyFunctTranslator (Program ((assignmentTranslator rt path cf cm nm expr), path) cf cm xs)
 --For native function.
---bodyFunctTranslator (Program (rt, path) cf cm ((Function rtp nm args (Left natnm)):xs)) =
+bodyFunctTranslator (Program (rt, path) cf cm ((Function rtp nm args (Left natnm)):xs)) = error ("Native functions aren't supported in this version of the compiler!")
 bodyFunctTranslator (Program (rt, path) cf cm stm@((Function rtp nm args (Right body)):xs)) = bodyFunctTranslator (functionHeadTranslator (Program (rt, path) cf cm stm) (newPath (getBlock (rt, path)) path))
+bodyFunctTranslator (Program (rt, path) cf cm ((ReturnSt stm):xs)) = bodyFunctTranslator (Program ((returnStTranslator (rt, path) stm cm), path) cf cm xs)
+bodyFunctTranslator (Program (rt, path) cf cm ((PrintSt stm):xs)) = bodyFunctTranslator (Program ((printStTranslator (rt, path) stm cm), path) cf cm xs)
+bodyFunctTranslator (Program (rt, path) cf cm stm@((WhileLoop expr body):xs)) = bodyFunctTranslator (whileLoopTranslator (Program ((changeTreeNewFunct rt path (IFLoop[])), path) cf cm stm) (newPath (getBlock (rt, path)) path) path)
+
+--Translator for while-loops.
+whileLoopTranslator :: Program -> [Int] -> [Int] -> Program
+whileLoopTranslator (Program (blc, path) cf cm stm@((WhileLoop expr body):xs)) newpath oldpath = case (getBlock (blc, path)) of
+	Nothing -> error " "
+	Just (IFLoop _) -> whileLoopTranslator (Program (blc, init path) cf cm stm) newpath oldpath
+	Just (Funct _ _ _ _ bcc vm _ _) -> finishWhile (whileLoopBodyTranslator (addStartJump (expressionTranslator blc path cm expr) path) (length bcc) path newpath cf cm body) path vm oldpath cm xs
+
+--Calculate size of list with bytecode.
+sizeofBC :: [ByteCodeCommand] -> Int -> (Int, Int, Int)
+sizeofBC bcc start = (start, (length bcc), foldl (\acc x -> acc + (commandSize x)) 0 (drop start bcc))
+	where commandSize x = case x of
+		(DLOAD _) -> 9
+		(ILOAD _) -> 9
+		(SLOAD _) -> 3
+		(LOADDVAR _) -> 3
+		(LOADIVAR _) -> 3
+		(LOADSVAR _) -> 3
+		(STOREDVAR _) -> 3
+		(STORESVAR _) -> 3
+		(STOREIVAR _) -> 3
+		(LOADCTXIVAR _ _) -> 5
+		(LOADCTXDVAR _ _) -> 5
+		(LOADCTXSVAR _ _) -> 5
+		(STORECTXIVAR _ _) -> 5
+		(STORECTXDVAR _ _) -> 5
+		(STORECTXSVAR _ _) -> 5
+		(JA _) -> 3
+		(IFICMPNE _) -> 3
+		(IFICMPE _) -> 3
+		(IFICMPG _) -> 3
+		(IFICMPGE _) -> 3
+		(IFICMPL _) -> 3
+		(IFICMPLE _) -> 3
+		(CALL _) -> 3
+		(CALLNATIVE _) -> 3
+		_ -> 1
+
+--Returns empty funct.
+nonFunct :: Block
+nonFunct = Funct "0" 0 "" Nothing [] Map.empty 0 []
+
+--We need to restore path and VarMap.
+finishWhile :: (Block, Int) -> [Int] -> VarMap -> [Int] -> ConstMap -> [Statement] -> Program
+finishWhile (blc, cf) path vm oldpath cm stm = Program ((replaceVarMap blc path vm), oldpath) cf cm stm
+
+--Initiate calculations of jump size.
+calcJump :: Program -> (Int, Int, Int) -> [Int] -> (Block, Int)
+calcJump (Program (rt, newpath) cf cm _) (start, fin, size) path = addFinalJump (rt, path) cf cm (start, fin, size) (sizeofBC (byteCode (fromMaybe (nonFunct) (getBlock (rt, path)))) fin)
+
+--Add some code to back to the condition.
+addFinalJump :: SubBlock -> Int -> ConstMap -> (Int, Int, Int) -> (Int, Int, Int) -> (Block, Int)
+addFinalJump (blc, path) cf cm (start1, fin1, size1) (start2, fin2, size2) = ((changeTreeChangeBC (changeTreeNewBC blc path [JA (-size1 - size2 - 3)]) path (fin1 - 1) (JA (size2 + 3))), cf)
+
+--Translate the body of loop.
+whileLoopBodyTranslator :: Block -> Int -> [Int] -> [Int] -> Int -> ConstMap -> [Statement] -> (Block, Int)
+whileLoopBodyTranslator blc lengprev path newpath cf cm body = calcJump (bodyFunctTranslator (Program (blc, newpath) cf cm body)) (sizeofBC (byteCode (fromMaybe (nonFunct) (getBlock (blc, path)))) lengprev) path
+
+--Add some code to check the condition of entering to th loop.
+addStartJump :: (Block, Type) -> [Int] -> Block
+addStartJump (blc, tpexpr) path = case tpexpr of
+	"string" -> changeTreeNewBC blc path [POP, JA 0]
+	"int" -> changeTreeNewBC blc path [ILOAD0, IFICMPE 5, POP, POP, JA 5, POP, POP, JA 0]
+	"double" -> changeTreeNewBC blc path [DLOAD0, DCMP, SWAP, POP, SWAP, POP, ILOAD0, IFICMPE 5, POP, POP, JA 5, POP, POP, JA 0]
+
+--Translator for "print" statement. 
+--N.B. If print hasn't args - add DUMP command to bytecode.
+printStTranslator :: SubBlock -> (Maybe [Expression]) -> ConstMap -> Block
+printStTranslator (blc, path) Nothing _ = changeTreeNewBC blc path [DUMP]
+printStTranslator (blc, _) (Just []) _ = blc
+printStTranslator (blc, path) (Just (ex:pr)) cm = printStTranslator (printExprTranslator (expressionTranslator blc path cm ex) path, path) (Just pr) cm
+
+--Check type of print_expression and print it.
+printExprTranslator :: (Block, Type) -> [Int] -> Block
+printExprTranslator (blc, exprtp) path = case exprtp of
+	"int" -> changeTreeNewBC blc path [IPRINT, POP]
+	"double" -> changeTreeNewBC blc path [DPRINT, POP]
+	"string" -> changeTreeNewBC blc path [SPRINT, POP]
+	_ -> error ("Unexpected error")
+
+--Translator for "return" statement
+returnStTranslator :: SubBlock -> (Maybe Expression) -> ConstMap -> Block
+returnStTranslator (blc, path) jexpr cm = case (getBlock (blc, path)) of
+	Just (IFLoop _) -> returnStTranslator (blc, init path) jexpr cm
+	Just (Funct nm _ rtp _ _ _ _ _) -> case jexpr of
+		Nothing -> case (rtp) of
+			("void") -> case path of
+				[] -> changeTreeNewBC blc [] [STOP]
+				_ -> changeTreeNewBC blc path [RETURN]
+			(_) -> error ("Non-void function " ++ nm ++ " try to return void value instead of " ++ rtp)
+		(Just expr) -> changeTreeNewBC (checkTypeOfArg (expressionTranslator blc path cm expr) path rtp "return") path [RETURN]
+
+--Check if function returns "void" value, then add in the end of its bytecode command RETURN. Else - do nothing.
+isVoidFunct :: SubBlock -> Block
+isVoidFunct (blc, path) = case (getBlock (blc, path)) of
+	Nothing -> error ("Unexpected error")
+	Just (IFLoop _) -> blc
+	Just (Funct _ _ rtp _ _ _ _ _) -> if rtp == "void"
+		then changeTreeNewBC blc path [RETURN]
+		else blc
 
 --Translator for function. Create new Funct and start bodyFunctTranslator.
 functionHeadTranslator :: Program -> [Int] -> Program
@@ -166,8 +272,8 @@ addVar (blc, path) nm tp = case (getBlock (blc, path)) of
 
 --Function for searching variable in current function or context of its parents. Returns information about variable and function id.
 getVarInfo :: SubBlock -> Name -> Maybe (Name, Id, Type, Id)
-getVatInfo (blc, []) nm = case (Map.lookup nm (varMap blc)) of
-	Nothing -> error ("Attrmpt to use variable " ++ nm ++ " , which does not exist")
+getVarInfo (blc, []) nm = case (Map.lookup nm (varMap blc)) of
+	Nothing -> error ("Attempt to use variable " ++ nm ++ ", which does not exist")
 	Just (vid, vtp) -> return (nm, (getCurrentFid (blc, [])), vtp, vid)
 getVarInfo (blc, path) nm = case (getBlock (blc, path)) of
 	Just (IFLoop _) -> getVarInfo (blc, init path) nm
@@ -211,7 +317,9 @@ checkTypeOfArg (blc, acttp) path ftp nm = if (acttp == ftp)
 		("double", "int") -> changeTreeNewBC blc path [D2I]
 		("string", "int") -> changeTreeNewBC blc path [S2I]
 		("string", "double") -> changeTreeNewBC blc path [S2I, I2D]
-		(_, _) -> error ("Attempt to call function " ++ nm ++ " with argument of type " ++ acttp ++ " instead of type " ++ ftp)
+		(_, _) -> case nm of
+			"return" -> error ("Attempt to return value with type " ++ acttp ++ " from function with type " ++ ftp)
+			_ -> error ("Attempt to call function " ++ nm ++ " with argument of type " ++ acttp ++ " instead of type " ++ ftp)
 
 --Loading arguments, when we call some function.
 loadArgs :: SubBlock -> [Type] -> [Expression] -> ConstMap -> Name -> Block
@@ -392,19 +500,29 @@ binarBCType bin _ _ = if (bin == Sum || bin == Sub || bin == Mult || bin == Div)
 	then "double"
 	else "int"
 
+--If path points to the IFLoop block, we must move up before add a new var.
+changeTreeNewVar blc path nm tp = case (getBlock (blc, path)) of
+	Just (IFLoop _) -> changeTreeNewVar blc (init path) nm tp
+	_ -> changeTreeNewVarF blc path nm tp
+
 --Adding variable to function map. Returns new tree.
-changeTreeNewVar :: Block -> [Int] -> Name -> Type -> Block
-changeTreeNewVar blc [] nm tp = Funct (name blc) (idf blc) (retType blc) (tP blc) (byteCode blc) (Map.insert nm ((Map.size (varMap blc)), tp) (varMap blc)) ((maxVar blc)+1) (bl blc)
-changeTreeNewVar blc (p:ath) nm tp = case blc of
-	(IFLoop blc2) -> IFLoop (set (element p) (changeTreeNewVar (blc2 !! p) ath nm tp) blc2)
-	(Funct n i r t bc vm mv blc3) -> Funct n i r t bc vm mv (set (element p) (changeTreeNewVar (blc3 !! p) ath nm tp) blc3) 
+changeTreeNewVarF :: Block -> [Int] -> Name -> Type -> Block
+changeTreeNewVarF blc [] nm tp = Funct (name blc) (idf blc) (retType blc) (tP blc) (byteCode blc) (Map.insert nm ((Map.size (varMap blc)), tp) (varMap blc)) (max (maxVar blc) ((Map.size (varMap blc)) + 1)) (bl blc)
+changeTreeNewVarF blc (p:ath) nm tp = case blc of
+	(IFLoop blc2) -> IFLoop (set (element p) (changeTreeNewVarF (blc2 !! p) ath nm tp) blc2)
+	(Funct n i r t bc vm mv blc3) -> Funct n i r t bc vm mv (set (element p) (changeTreeNewVarF (blc3 !! p) ath nm tp) blc3) 
+
+--If path points to the IFLoop block, we must move up before add new bytecode commands.
+changeTreeNewBC blc path bcc = case (getBlock (blc, path)) of
+	Just (IFLoop _) -> changeTreeNewBC blc (init path) bcc
+	_ -> changeTreeNewBCF blc path bcc
 
 --Adding bytecode to function. Returns new tree.
-changeTreeNewBC :: Block -> [Int] -> [ByteCodeCommand] -> Block
-changeTreeNewBC blc [] bcc = Funct (name blc) (idf blc) (retType blc) (tP blc) ((byteCode blc) ++ bcc) (varMap blc) (maxVar blc) (bl blc)
-changeTreeNewBC blc (p:ath) bcc = case blc of
-	(IFLoop blc2) -> IFLoop (set (element p) (changeTreeNewBC (blc2 !! p) ath bcc) blc2)
-	(Funct n i r t bc vm mv blc3) -> Funct n i r t bc vm mv (set (element p) (changeTreeNewBC (blc3 !! p) ath bcc) blc3)
+changeTreeNewBCF :: Block -> [Int] -> [ByteCodeCommand] -> Block
+changeTreeNewBCF blc [] bcc = Funct (name blc) (idf blc) (retType blc) (tP blc) ((byteCode blc) ++ bcc) (varMap blc) (maxVar blc) (bl blc)
+changeTreeNewBCF blc (p:ath) bcc = case blc of
+	(IFLoop blc2) -> IFLoop (set (element p) (changeTreeNewBCF (blc2 !! p) ath bcc) blc2)
+	(Funct n i r t bc vm mv blc3) -> Funct n i r t bc vm mv (set (element p) (changeTreeNewBCF (blc3 !! p) ath bcc) blc3)
 
 --Adding function to current function subblocks. Returns new tree.
 changeTreeNewFunct :: Block -> [Int] -> Block -> Block
@@ -414,6 +532,20 @@ changeTreeNewFunct rt [] blc = case rt of
 changeTreeNewFunct rt (p:ath) blc = case rt of
 	(IFLoop blc2) -> IFLoop (set (element p) (changeTreeNewFunct (blc2 !! p) ath blc) blc2)
 	(Funct n i r t bc vm mv blc3) -> Funct n i r t bc vm mv (set (element p) (changeTreeNewFunct (blc3 !! p) ath blc) blc3)
+
+--Replace command "place" in list of bytecode commands with command bcc.
+changeTreeChangeBC :: Block -> [Int] -> Int -> ByteCodeCommand -> Block
+changeTreeChangeBC blc [] place bcc = Funct (name blc) (idf blc) (retType blc) (tP blc) (set (element place) bcc (byteCode blc)) (varMap blc) (maxVar blc) (bl blc)
+changeTreeChangeBC blc (p:ath) place bcc = case blc of
+	(IFLoop blc2) -> IFLoop (set (element p) (changeTreeChangeBC (blc2 !! p) ath place bcc) blc2)
+	(Funct n i r t bc vm mv blc3) -> Funct n i r t bc vm mv (set (element p) (changeTreeChangeBC (blc3 !! p) ath place bcc) blc3)
+
+--Restore VarMap after translating IFLoop block.
+replaceVarMap :: Block -> [Int] -> VarMap -> Block
+replaceVarMap blc [] vmr = Funct (name blc) (idf blc) (retType blc) (tP blc) (byteCode blc) vmr (maxVar blc) (bl blc)
+replaceVarMap blc (p:ath) vmr = case blc of
+	(IFLoop blc2) -> IFLoop (set (element p) (replaceVarMap (blc2 !! p) ath vmr) blc2)
+	(Funct n i r t bc vm mv blc3) -> Funct n i r t bc vm mv (set (element p) (replaceVarMap (blc3 !! p) ath vmr) blc3)
 
 --Translator for declarations.
 declarationTranslator :: Type -> Name -> Block -> [Int] -> Block
