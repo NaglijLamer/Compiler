@@ -1,8 +1,14 @@
 
 module Translator
 (
-	--mainTranslator
-	bodyFunctTranslator
+	mainTranslator
+,	bodyFunctTranslator
+,	sizeofBC
+,	ConstMap (..)
+,	ByteCodeCommand (..)
+,	SubBlock
+,	Block (..)
+,	Program (..)
 ) where
 
 import Parser
@@ -39,8 +45,10 @@ data ByteCodeCommand = DLOAD Double | ILOAD Int | SLOAD Int
 			| IFICMPL Int | IFICMPLE Int | DUMP
 			| CALL Int | CALLNATIVE Int | RETURN | BREAK | STOP | INVALID deriving Show
 
---mainTranslator :: [Statement] -> (Either Error ([ByteCodeCommand], Header)
---mainTranslator = 
+--Main Function of translator.
+mainTranslator :: [Statement] -> Program
+mainTranslator = rootInitFunction
+
 --Test main function.
 main =
 	do { c <- getContents
@@ -124,6 +132,17 @@ bodyFunctTranslator (Program (rt, path) cf cm stm@((Function rtp nm args (Right 
 bodyFunctTranslator (Program (rt, path) cf cm ((ReturnSt stm):xs)) = bodyFunctTranslator (Program ((returnStTranslator (rt, path) stm cm), path) cf cm xs)
 bodyFunctTranslator (Program (rt, path) cf cm ((PrintSt stm):xs)) = bodyFunctTranslator (Program ((printStTranslator (rt, path) stm cm), path) cf cm xs)
 bodyFunctTranslator (Program (rt, path) cf cm stm@((WhileLoop expr body):xs)) = bodyFunctTranslator (whileLoopTranslator (Program ((changeTreeNewFunct rt path (IFLoop[])), path) cf cm stm) (newPath (getBlock (rt, path)) path) path)
+bodyFunctTranslator (Program (rt, path) cf cm ((FunctionCall nm expr):xs)) = bodyFunctTranslator (Program ((callFunctionStmTranslator rt path (getFunct (rt, path) nm) expr cm nm), path) cf cm xs)
+
+--Function for translating of call function as statement
+callFunctionStmTranslator :: Block -> [Int] -> (Maybe Block) -> (Maybe [Expression]) -> ConstMap -> Name -> Block
+callFunctionStmTranslator _ _ Nothing _ _ fname = error ("Function " ++ fname ++ "does not exist!")
+callFunctionStmTranslator _ _ (Just (Funct _ _ _ (Just _) _ _ _ _)) Nothing _ fname = error ("Attempt to call function " ++ fname ++ ", with no args")
+callFunctionStmTranslator _ _ (Just (Funct _ _ _ Nothing _ _ _ _)) (Just _) _ fname = error ("Attempt to call function " ++ fname ++ ", which has no args with some argument")
+callFunctionStmTranslator blc path (Just (Funct _ fid "void" Nothing _ _ _ _)) Nothing _ _ = changeTreeNewBC blc path [CALL fid]
+callFunctionStmTranslator blc path (Just (Funct _ fid "void" (Just ftp) _ _ _ _)) (Just expr) cm fname = changeTreeNewBC (loadArgs (blc, path) ftp expr cm fname) path [CALL fid]
+callFunctionStmTranslator blc path (Just (Funct _ fid _ Nothing _ _ _ _)) Nothing _ _ = changeTreeNewBC blc path [(CALL fid), POP]
+callFunctionStmTranslator blc path (Just (Funct _ fid _ (Just ftp) _ _ _ _)) (Just expr) cm fname = changeTreeNewBC (loadArgs (blc, path) ftp expr cm fname) path [(CALL fid), POP]
 
 --Translator for while-loops.
 whileLoopTranslator :: Program -> [Int] -> [Int] -> Program
