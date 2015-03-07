@@ -5,7 +5,6 @@ module Printer
 
 import Parser
 import Translator
-import Data.Word
 import Data.Binary.Put
 import Data.ByteString.Char8
 import qualified Data.ByteString.Lazy as L
@@ -19,6 +18,7 @@ import qualified Data.List as List
 --mainPrinter ::
 --mainPrinter = 
 
+--Test main Function.
 main = do { c <- Prelude.getContents
 ;	case mainParser c of
 		Left e -> do {
@@ -27,13 +27,14 @@ main = do { c <- Prelude.getContents
 		Right r -> do {
 			L.writeFile "C:\\Users\\1\\Desktop\\outp" (runPut (createBinary (createFile (mainTranslator r)))) }}
 
-
+--Data types for presentation of bytecode file structure.
 data FunctionHeader = FunctionHeader Int Int Int ByteString Int Int Int
 data FunctionCode = FunctionCode FunctionHeader [ByteCodeCommand]
 type Prog = [FunctionCode]
 data Header = Header Int Int Int Int [ByteString] Int Int
 type File = (Header, Prog)
 
+--Add to monad Put header and body of file.
 createBinary :: File -> Put
 createBinary ((Header s v cc cs cons ide cf), fcode) = do {
 	putWord16le (fromIntegral (s) :: Word16)
@@ -45,6 +46,7 @@ createBinary ((Header s v cc cs cons ide cf), fcode) = do {
 ;	putWord32le (fromIntegral (cf) :: Word32)
 ;	mapM_ createBinaryFunct fcode }
 
+--Add to monad Put header and body of function.
 createBinaryFunct :: FunctionCode -> Put
 createBinaryFunct (FunctionCode (FunctionHeader fs fbc fsign signat fid cl ca) bcc) = do {
 	putWord32le (fromIntegral (fs) :: Word32)
@@ -56,6 +58,7 @@ createBinaryFunct (FunctionCode (FunctionHeader fs fbc fsign signat fid cl ca) b
 ;	putWord32le (fromIntegral (ca) :: Word32) 
 ;	mapM_ createBinaryBC bcc }
 
+--Add to monad Put bytecode command.
 createBinaryBC :: ByteCodeCommand -> Put
 createBinaryBC bcc = case bcc of
 	INVALID -> putWord8 0
@@ -143,28 +146,35 @@ createBinaryBC bcc = case bcc of
 	RETURN -> putWord8 82
 	BREAK -> putWord8 83
 
+--Transform map of constants and tree of contexts into presentation of bytecode file.
 createFile :: Program -> File
 createFile (Program (rt, _) cf cm _) = ((informToHeader cf cm (constToBS cm)), (functionToFC [rt] []))
 
+--Create header of file.
 informToHeader :: Int -> ConstMap -> ([ByteString], Int) -> Header
 informToHeader cf cm (bsc, size) = Header 47802 60315 (Map.size cm) size bsc 0 cf
 
+--Transform tree of contexts into functionheader and bytecode.
 functionToFC :: [Block] -> Prog -> Prog
 functionToFC [] fc = fc
 functionToFC blcs fc = case (List.head blcs) of
 	(IFLoop blcs2) -> functionToFC (List.tail blcs) (functionToFC blcs2 fc)
 	(Funct _ idf _ tpv bcc _ mv blcs3) -> functionToFC (List.tail blcs) (functionToFC blcs3 (fc ++ [convertFunction idf tpv bcc mv (sizeofBC bcc 0)]))
 
+--Convert function int header and body.
 convertFunction :: Int -> (Maybe [String]) -> [ByteCodeCommand] -> Int -> (Int, Int, Int) -> FunctionCode
 convertFunction idf Nothing bcc mv (_, _, size) = FunctionCode (FunctionHeader (size + 22) size 0 BS.empty idf mv 0) bcc
 convertFunction idf (Just tpv) bcc mv (_, _, size) = FunctionCode (FunctionHeader (size + 22) size 0 BS.empty idf mv (List.length (tpv))) bcc
 
+--Convert map of constants into strings.
 constToBS :: ConstMap -> ([ByteString], Int)
 constToBS cm = convertStr (List.sortBy compConst (Map.toList cm)) [] 0
 
+--Comparator for sorting list of constants.
 compConst :: (String, Int) -> (String, Int) -> Ordering
 compConst (str1, i1) (str2, i2) = compare i1 i2
 
+--Convert list of pairs (String, Int) to list of C-srtyle ByteStrings and calculate their size.
 convertStr :: [(String, Int)] -> [ByteString] -> Int -> ([ByteString], Int)
 convertStr [] bsl num = (bsl, num)
 convertStr (s:l) bls num = convertStr l (bls ++ [pack((fst s) ++ "\0")]) (num + List.length(fst s) + 1)

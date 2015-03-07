@@ -106,6 +106,8 @@ moveUp (tree, []) = Nothing
 moveUp (tree, path) = Just (tree, init path)
 
 --Types for constants, program, e t.c.
+data LoopType = WHILE | FOR
+
 type VarMap = Map.Map String (Id, Type)
 
 type ConstMap = Map.Map String Id
@@ -132,6 +134,8 @@ bodyFunctTranslator (Program (rt, path) cf cm stm@((Function rtp nm args (Right 
 bodyFunctTranslator (Program (rt, path) cf cm ((ReturnSt stm):xs)) = bodyFunctTranslator (Program ((returnStTranslator (rt, path) stm cm), path) cf cm xs)
 bodyFunctTranslator (Program (rt, path) cf cm ((PrintSt stm):xs)) = bodyFunctTranslator (Program ((printStTranslator (rt, path) stm cm), path) cf cm xs)
 bodyFunctTranslator (Program (rt, path) cf cm stm@((WhileLoop expr body):xs)) = bodyFunctTranslator (whileLoopTranslator (Program ((changeTreeNewFunct rt path (IFLoop[])), path) cf cm stm) (newPath (getBlock (rt, path)) path) path)
+bodyFunctTranslator (Program (rt, path) cf cm stm@((ForLoop nm expr1 expr2 body):xs)) = bodyFunctTranslator (forLoopTranslator (Program ((changeTreeNewFunct rt path (IFLoop[])), path) cf cm stm) (newPath (getBlock (rt, path)) path) path)
+bodyFunctTranslator (Program (rt, path) cf cm stm@((IfElse expr body bodyelse):xs)) = bodyFunctTranslator (ifElseTranslator (Program ((changeTreeNewFunct rt path (IFLoop[])), path) cf cm stm) (newPath (getBlock (rt, path)) path) path)
 bodyFunctTranslator (Program (rt, path) cf cm ((FunctionCall nm expr):xs)) = bodyFunctTranslator (Program ((callFunctionStmTranslator rt path (getFunct (rt, path) nm) expr cm nm), path) cf cm xs)
 
 --Function for translating of call function as statement
@@ -144,12 +148,50 @@ callFunctionStmTranslator blc path (Just (Funct _ fid "void" (Just ftp) _ _ _ _)
 callFunctionStmTranslator blc path (Just (Funct _ fid _ Nothing _ _ _ _)) Nothing _ _ = changeTreeNewBC blc path [(CALL fid), POP]
 callFunctionStmTranslator blc path (Just (Funct _ fid _ (Just ftp) _ _ _ _)) (Just expr) cm fname = changeTreeNewBC (loadArgs (blc, path) ftp expr cm fname) path [(CALL fid), POP]
 
+--Translator for if-statement.
+ifElseTranslator :: Program -> [Int] -> [Int] -> Program
+ifElseTranslator (Program (blc, path) cf cm stm@((IfElse expr body bodyelse):xs)) newpath oldpath = case (getBlock (blc, path)) of
+	Nothing -> error " "
+	Just (IFLoop _) -> ifElseTranslator (Program (blc, init path) cf cm stm) newpath oldpath
+	Just (Funct _ _ _ _ bcc vm _ _) -> calcIfJump (ifBodyTranslator (addStartWhileJump (expressionTranslator blc path cm expr) path) path newpath cf cm body bodyelse) path oldpath xs bodyelse vm cm
+
+--Initiate calculations of jump size in if-statement.
+calcIfJump :: ((Block, Int), Int) -> [Int] -> [Int] -> [Statement] -> (Maybe [Statement]) -> VarMap -> ConstMap -> Program
+calcIfJump ((blc, cf), lengthprev) path oldpath stm bodyelse vm cm = addFinalIfJump (blc, cf) (sizeofBC (byteCode (fromMaybe (nonFunct) (getBlock (blc, path)))) lengthprev) path oldpath stm bodyelse vm cm
+
+--Restore VarMap and path. If we have else-part - call elseTranslator.
+addFinalIfJump :: (Block, Int) -> (Int, Int, Int) -> [Int] -> [Int] -> [Statement] -> (Maybe [Statement]) -> VarMap -> ConstMap -> Program
+addFinalIfJump (blc, cf) (start, fin, size) path oldpath stm bodyelse vm cm = if (isNothing bodyelse)
+	then finishIf
+	else (elseTranslator path bodyelse finishIf)
+	where finishIf = finishLoop ((changeTreeChangeBC blc path (start - 1) (JA size)), cf) path vm oldpath cm stm
+
+--If if-statement has else-part - start if-translator for this part.
+elseTranslator path bodyelse (Program (blc, oldpath) cf cm stm) = calcIfJump (ifBodyTranslator (changeTreeNewFunct blc oldpath (IFLoop[])) path (newPath (getBlock (blc, oldpath)) oldpath) cf cm (fromMaybe [] bodyelse) Nothing) path oldpath stm Nothing (getVm (getBlock (blc, oldpath))) cm
+	where getVm (Just (Funct _ _ _ _ _ vm _ _)) = vm
+
+--Translator for for-loops.
+forLoopTranslator :: Program -> [Int] -> [Int] -> Program
+forLoopTranslator (Program (blc, path) cf cm stm@((ForLoop name expr1 expr2 body):xs)) newpath oldpath = case (getBlock (blc, path)) of
+	Nothing -> error " "
+	Just (IFLoop _) -> forLoopTranslator (Program (blc, init path) cf cm stm) newpath oldpath
+	Just (Funct _ _ _ _ bcc vm _ _) -> finishLoop (loopBodyTranslator (forLoopHeadTranslator (expressionTranslator blc path cm expr1) (getVarInfo (blc, path) name) path cm expr2) path newpath cf cm body FOR) path vm oldpath cm xs
+
 --Translator for while-loops.
 whileLoopTranslator :: Program -> [Int] -> [Int] -> Program
 whileLoopTranslator (Program (blc, path) cf cm stm@((WhileLoop expr body):xs)) newpath oldpath = case (getBlock (blc, path)) of
 	Nothing -> error " "
 	Just (IFLoop _) -> whileLoopTranslator (Program (blc, init path) cf cm stm) newpath oldpath
-	Just (Funct _ _ _ _ bcc vm _ _) -> finishWhile (whileLoopBodyTranslator (addStartJump (expressionTranslator blc path cm expr) path) (length bcc) path newpath cf cm body) path vm oldpath cm xs
+	Just (Funct _ _ _ _ bcc vm _ _) -> finishLoop (loopBodyTranslator ((addStartWhileJump (expressionTranslator blc path cm expr) path), (length bcc), Nothing) path newpath cf cm body WHILE) path vm oldpath cm xs
+
+--Translator of head expression for for-loop.
+forLoopHeadTranslator :: (Block, Type) -> (Maybe (Name, Id, Type, Id)) -> [Int] -> ConstMap -> Expression -> (Block, Int, Maybe(Name, Id, Type, Id))
+forLoopHeadTranslator (blc, tpexpr) (Just (nm, fid, tpvar, vid)) path cm expr = if tpexpr /= "int" || tpvar /= "int"
+	then error ("Wrong type in arguments of for-loop")
+	else ((addStartForJump (forLoopSecExprTranslator (loadVar (Just (nm, fid, tpvar, vid)) ((assignmentToVar (blc, tpexpr) path (Just (nm, fid, tpvar, vid))), path)) path cm expr) path), (length (byteCode (fromMaybe (nonFunct) (getBlock (blc, path))))), Just(nm, fid, tpvar, vid))
+
+--Auxiliary function to translate the second expression in condition of for-loop.
+forLoopSecExprTranslator (blc, tp) path cm expr = expressionTranslator blc path cm expr
 
 --Calculate size of list with bytecode.
 sizeofBC :: [ByteCodeCommand] -> Int -> (Int, Int, Int)
@@ -186,24 +228,45 @@ nonFunct :: Block
 nonFunct = Funct "0" 0 "" Nothing [] Map.empty 0 []
 
 --We need to restore path and VarMap.
-finishWhile :: (Block, Int) -> [Int] -> VarMap -> [Int] -> ConstMap -> [Statement] -> Program
-finishWhile (blc, cf) path vm oldpath cm stm = Program ((replaceVarMap blc path vm), oldpath) cf cm stm
+finishLoop :: (Block, Int) -> [Int] -> VarMap -> [Int] -> ConstMap -> [Statement] -> Program
+finishLoop (blc, cf) path vm oldpath cm stm = Program ((replaceVarMap blc path vm), oldpath) cf cm stm
 
 --Initiate calculations of jump size.
-calcJump :: Program -> (Int, Int, Int) -> [Int] -> (Block, Int)
-calcJump (Program (rt, newpath) cf cm _) (start, fin, size) path = addFinalJump (rt, path) cf cm (start, fin, size) (sizeofBC (byteCode (fromMaybe (nonFunct) (getBlock (rt, path)))) fin)
+calcJump :: Program -> (Int, Int, Int) -> [Int] -> LoopType -> Maybe (Name, Id, Type, Id) -> (Block, Int)
+calcJump (Program (rt, newpath) cf _ _) (start, fin, size) path lptp var = addFinalJump (rt, path) cf (start, fin, size) (sizeofBC (byteCode (fromMaybe (nonFunct) (getBlock (rt, path)))) fin) lptp var
 
 --Add some code to back to the condition.
-addFinalJump :: SubBlock -> Int -> ConstMap -> (Int, Int, Int) -> (Int, Int, Int) -> (Block, Int)
-addFinalJump (blc, path) cf cm (start1, fin1, size1) (start2, fin2, size2) = ((changeTreeChangeBC (changeTreeNewBC blc path [JA (-size1 - size2 - 3)]) path (fin1 - 1) (JA (size2 + 3))), cf)
+addFinalJump :: SubBlock -> Int -> (Int, Int, Int) -> (Int, Int, Int) -> LoopType -> Maybe (Name, Id, Type, Id) -> (Block, Int)
+addFinalJump (blc, path) cf (start1, fin1, size1) (start2, fin2, size2) lptp  var = case lptp of
+	WHILE -> ((changeTreeChangeBC (changeTreeNewBC blc path [JA (-size1 - size2 - 3)]) path (fin1 - 1) (JA (size2 + 3))), cf)
+	--FOR -> ((changeTreeChangeBC (changeTreeNewBC blc path [ILOAD1, IADD, (JA (-size1 - size2 - 5))]) path (fin1 - 1) (JA (size2 + 5))), cf)
+	FOR -> ((changeTreeChangeBC (changeTreeNewBC (fst (loadVar var (blc, path))) path [ILOAD1, IADD, (JA (-size1 - size2 - (size3 var) - 5))]) path (fin1 - 1) (JA (size2 + (size3 var) + 5))), cf)
+		where size3 (Just (nm, fid, vtp, vid)) = if fid /= (getCurrentFid (blc, path))
+			then 5
+			else if vid < 4
+				then 1
+				else 3 
 
+--Translator of if-body. If we have else-part - add JA-command to jump over it.
+ifBodyTranslator :: Block -> [Int] -> [Int] -> Int -> ConstMap -> [Statement] -> (Maybe [Statement]) -> ((Block, Int), Int)
+ifBodyTranslator blc path newpath cf cm body bodyelse = (maybeElse (bodyFunctTranslator (Program (blc, newpath) cf cm body)), (length (byteCode (fromMaybe (nonFunct) (getBlock (blc, path))))))
+	where maybeElse (Program (blc, _) cf _ _) = case bodyelse of
+		Nothing -> (blc, cf)
+		Just stm -> ((changeTreeNewBC blc path [JA 0]), cf)
+	
 --Translate the body of loop.
-whileLoopBodyTranslator :: Block -> Int -> [Int] -> [Int] -> Int -> ConstMap -> [Statement] -> (Block, Int)
-whileLoopBodyTranslator blc lengprev path newpath cf cm body = calcJump (bodyFunctTranslator (Program (blc, newpath) cf cm body)) (sizeofBC (byteCode (fromMaybe (nonFunct) (getBlock (blc, path)))) lengprev) path
+loopBodyTranslator :: (Block, Int, Maybe(Name, Id, Type, Id)) -> [Int] -> [Int] -> Int -> ConstMap -> [Statement] -> LoopType -> (Block, Int)
+loopBodyTranslator (blc, lengprev, var) path newpath cf cm body lptp = calcJump (bodyFunctTranslator (Program (blc, newpath) cf cm body)) (sizeofBC (byteCode (fromMaybe (nonFunct) (getBlock (blc, path)))) lengprev) path lptp var
 
---Add some code to check the condition of entering to th loop.
-addStartJump :: (Block, Type) -> [Int] -> Block
-addStartJump (blc, tpexpr) path = case tpexpr of
+--Add some code to check the condition of entering to the for loop.
+addStartForJump :: (Block, Type) -> [Int] -> Block
+addStartForJump (blc, tpexpr) path = case tpexpr of
+	"int" -> changeTreeNewBC blc path [IFICMPL 5, POP, POP, JA 5, POP, POP, JA 0]
+	_ -> error " "
+
+--Add some code to check the condition of entering to the while loop.
+addStartWhileJump :: (Block, Type) -> [Int] -> Block
+addStartWhileJump (blc, tpexpr) path = case tpexpr of
 	"string" -> changeTreeNewBC blc path [POP, JA 0]
 	"int" -> changeTreeNewBC blc path [ILOAD0, IFICMPE 5, POP, POP, JA 5, POP, POP, JA 0]
 	"double" -> changeTreeNewBC blc path [DLOAD0, DCMP, SWAP, POP, SWAP, POP, ILOAD0, IFICMPE 5, POP, POP, JA 5, POP, POP, JA 0]
@@ -494,7 +557,7 @@ binarOpBC "int" Mult = [IMUL]
 binarOpBC "double" Mult = [DMUL]
 binarOpBC "int" Div = [IDIV]
 binarOpBC "double" Div = [DDIV]
-binarOpBC "int" Eq = [(IFICMPE 4), (ILOAD 0), (JA 1), (ILOAD1), (SWAP), (POP), (SWAP), (POP)]
+binarOpBC "int" Eq = [(IFICMPE 4), (ILOAD0), (JA 1), (ILOAD1), (SWAP), (POP), (SWAP), (POP)]
 binarOpBC "double" Eq = [(DCMP), (SWAP), (POP), (SWAP), (POP), (ILOAD0), (IFICMPNE 6), (POP), (POP), (ILOAD1), (JA 2), (SWAP), (POP)]
 binarOpBC "int" Neq = [(IFICMPNE 4), (ILOAD0), (JA 1), (ILOAD1), (SWAP), (POP), (SWAP), (POP)]
 binarOpBC "double" Neq = [(DCMP), (SWAP), (POP), (SWAP), (POP), (ILOAD0), (IFICMPE 6), (POP), (POP), (ILOAD1), (JA 1), (POP)]
