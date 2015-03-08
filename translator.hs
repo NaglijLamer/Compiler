@@ -12,6 +12,7 @@ module Translator
 ) where
 
 import Parser
+import Constant
 import Text.ParserCombinators.Parsec
 import qualified Data.Map.Strict as Map
 import Data.List
@@ -58,6 +59,7 @@ main =
 			;	print e }
 			Right r -> do {
 				mapM_ print r
+			;	mapM_ print (Map.toList (constAnalyzer r)) 
 			;	print (maxVar(fst(root(rootInitFunction r))))
 			;	mapM_ print (Map.toList((varMap (fst(root (rootInitFunction r)))))) 
 			;	mapM_ print (byteCode(fst(root(rootInitFunction r))))
@@ -110,7 +112,7 @@ data LoopType = WHILE | FOR
 
 type VarMap = Map.Map String (Id, Type)
 
-type ConstMap = Map.Map String Id
+--type ConstMap = Map.Map String Id
 
 data Program = Program { root :: SubBlock
 			, countF :: Int
@@ -119,7 +121,7 @@ data Program = Program { root :: SubBlock
 
 --Start function of translating. Create a Program and initiate root-function.
 rootInitFunction :: [Statement] -> Program
-rootInitFunction st = bodyFunctTranslator (Program ((Funct "0root" 0 "void" Nothing [] Map.empty 0 []), []) 1 Map.empty st)
+rootInitFunction st = bodyFunctTranslator (Program ((Funct "0root" 0 "void" Nothing [] Map.empty 0 []), []) 1 (constAnalyzer st) st)
 
 --Translator for function body.
 bodyFunctTranslator :: Program -> Program
@@ -131,7 +133,8 @@ bodyFunctTranslator (Program (rt, path) cf cm ((Assignment nm expr):xs)) = bodyF
 --For native function.
 bodyFunctTranslator (Program (rt, path) cf cm ((Function rtp nm args (Left natnm)):xs)) = error ("Native functions aren't supported in this version of the compiler!")
 bodyFunctTranslator (Program (rt, path) cf cm stm@((Function rtp nm args (Right body)):xs)) = bodyFunctTranslator (functionHeadTranslator (Program (rt, path) cf cm stm) (newPath (getBlock (rt, path)) path))
-bodyFunctTranslator (Program (rt, path) cf cm ((ReturnSt stm):xs)) = bodyFunctTranslator (Program ((returnStTranslator (rt, path) stm cm), path) cf cm xs)
+--bodyFunctTranslator (Program (rt, path) cf cm ((ReturnSt stm):xs)) = bodyFunctTranslator (Program ((returnStTranslator (rt, path) stm cm), path) cf cm xs)
+bodyFunctTranslator (Program (rt, path) cf cm ((ReturnSt stm):xs)) = Program ((returnStTranslator (rt, path) stm cm), path) cf cm  []
 bodyFunctTranslator (Program (rt, path) cf cm ((PrintSt stm):xs)) = bodyFunctTranslator (Program ((printStTranslator (rt, path) stm cm), path) cf cm xs)
 bodyFunctTranslator (Program (rt, path) cf cm stm@((WhileLoop expr body):xs)) = bodyFunctTranslator (whileLoopTranslator (Program ((changeTreeNewFunct rt path (IFLoop[])), path) cf cm stm) (newPath (getBlock (rt, path)) path) path)
 bodyFunctTranslator (Program (rt, path) cf cm stm@((ForLoop nm expr1 expr2 body):xs)) = bodyFunctTranslator (forLoopTranslator (Program ((changeTreeNewFunct rt path (IFLoop[])), path) cf cm stm) (newPath (getBlock (rt, path)) path) path)

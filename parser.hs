@@ -58,6 +58,7 @@ brace = Token.braces lexer
 nat = Token.natural lexer
 flo = Token.float lexer
 commSep = Token.commaSep lexer
+stringLit = Token.stringLiteral lexer
 
 type Name = String
 type Type = String
@@ -183,6 +184,7 @@ numberParser = (++) <$> (many1 digit) <*> (option "" $ try((:) <$> char '.' <*> 
 stringParser :: CharParser () String
 --Maybe, that's nice.
 stringParser = between (char '\'') (char '\'') (many (noneOf "\'"))
+--stringParser = stringLit
 
 -- Parser for Expressions
 unarOp op expr = Prefix (try (whiteSpaces >> string op >> whiteSpaces) >> return (UnarExpr expr))
