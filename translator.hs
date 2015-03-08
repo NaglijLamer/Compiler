@@ -154,7 +154,7 @@ callFunctionStmTranslator blc path (Just (Funct _ fid _ (Just ftp) _ _ _ _)) (Ju
 --Translator for if-statement.
 ifElseTranslator :: Program -> [Int] -> [Int] -> Program
 ifElseTranslator (Program (blc, path) cf cm stm@((IfElse expr body bodyelse):xs)) newpath oldpath = case (getBlock (blc, path)) of
-	Nothing -> error " "
+	Nothing -> error "ifElseTranslator error"
 	Just (IFLoop _) -> ifElseTranslator (Program (blc, init path) cf cm stm) newpath oldpath
 	Just (Funct _ _ _ _ bcc vm _ _) -> calcIfJump (ifBodyTranslator (addStartWhileJump (expressionTranslator blc path cm expr) path) path newpath cf cm body bodyelse) path oldpath xs bodyelse vm cm
 
@@ -176,14 +176,14 @@ elseTranslator path bodyelse (Program (blc, oldpath) cf cm stm) = calcIfJump (if
 --Translator for for-loops.
 forLoopTranslator :: Program -> [Int] -> [Int] -> Program
 forLoopTranslator (Program (blc, path) cf cm stm@((ForLoop name expr1 expr2 body):xs)) newpath oldpath = case (getBlock (blc, path)) of
-	Nothing -> error " "
+	Nothing -> error "ForLoopTranslator error."
 	Just (IFLoop _) -> forLoopTranslator (Program (blc, init path) cf cm stm) newpath oldpath
 	Just (Funct _ _ _ _ bcc vm _ _) -> finishLoop (loopBodyTranslator (forLoopHeadTranslator (expressionTranslator blc path cm expr1) (getVarInfo (blc, path) name) path cm expr2) path newpath cf cm body FOR) path vm oldpath cm xs
 
 --Translator for while-loops.
 whileLoopTranslator :: Program -> [Int] -> [Int] -> Program
 whileLoopTranslator (Program (blc, path) cf cm stm@((WhileLoop expr body):xs)) newpath oldpath = case (getBlock (blc, path)) of
-	Nothing -> error " "
+	Nothing -> error "WhileLoopTranslator error."
 	Just (IFLoop _) -> whileLoopTranslator (Program (blc, init path) cf cm stm) newpath oldpath
 	Just (Funct _ _ _ _ bcc vm _ _) -> finishLoop (loopBodyTranslator ((addStartWhileJump (expressionTranslator blc path cm expr) path), (length bcc), Nothing) path newpath cf cm body WHILE) path vm oldpath cm xs
 
@@ -265,7 +265,7 @@ loopBodyTranslator (blc, lengprev, var) path newpath cf cm body lptp = calcJump 
 addStartForJump :: (Block, Type) -> [Int] -> Block
 addStartForJump (blc, tpexpr) path = case tpexpr of
 	"int" -> changeTreeNewBC blc path [IFICMPL 5, POP, POP, JA 5, POP, POP, JA 0]
-	_ -> error " "
+	_ -> error "addStartForJump error."
 
 --Add some code to check the condition of entering to the while loop.
 addStartWhileJump :: (Block, Type) -> [Int] -> Block
@@ -543,6 +543,12 @@ binarBC _ _ "string" = error ("Attempt to use binary operator with string value"
 binarBC Mod tp1 tp2 = if (tp1 /= "int" || tp2 /= "int")
 	then error ("Attempt to use Mod operation with double variable")
 	else [IMOD]
+binarBC AndB tp1 tp2 = if (tp1 /= "int" || tp2 /= "int")
+	then error ("Attempt to use Bitwise And operation with double variable")
+	else [IAAND]
+binarBC OrB tp1 tp2 = if (tp1 /= "int" || tp2 /= "int")
+	then error ("Attempt to use Bitwise Or operation with double variable")
+	else [IAOR]
 binarBC bin tp1 tp2 = case (tp1, tp2) of
 	--("int", "int") -> ((changeTreeNewBC blc path (binarOpBC "int" bin)), "int")
 	("int", "int") -> binarOpBC "int" bin
@@ -572,15 +578,17 @@ binarOpBC "int" Gte = [(IFICMPGE 4), (ILOAD0), (JA 1), (ILOAD1), (SWAP), (POP), 
 binarOpBC "double" Gte = [(DCMP), (SWAP), (POP), (SWAP), (POP), (ILOADM1), (IFICMPE 6), (POP), (POP), (ILOAD1), (JA 3), (POP), (POP), (ILOAD0)]
 binarOpBC "int" Lwe = [(IFICMPLE 4), (ILOAD0), (JA 1), (ILOAD1), (SWAP), (POP), (SWAP), (POP)]
 binarOpBC "double" Lwe = [(DCMP), (SWAP), (POP), (SWAP), (POP), (ILOAD1), (IFICMPE 6), (POP), (POP), (ILOAD0), (JA 2), (SWAP), (POP)]
-binarOpBC "int" And = [IAAND]
+binarOpBC "int" And = [(ILOAD0), (IFICMPE 11), (SWAP), (POP), (IFICMPE 8), (POP), (POP), (ILOAD1), (JA 3), (POP), (SWAP), (POP)]
 binarOpBC "double" And = [(DLOAD0), (DCMP), (ILOAD0), (IFICMPE 23), (POP), (POP), (SWAP), (POP), (DCMP), (ILOAD0), (IFICMPE 9), (POP), (POP), (POP), (POP), (ILOAD1), (JA 6), (POP), (POP), (POP), (POP), (POP), (ILOAD0)]
-binarOpBC "int" Or = [IAOR]
+binarOpBC "int" Or = [(ILOAD0), (IFICMPNE 8), (POP), (IFICMPNE 5), (POP), (JA 4), (POP), (POP), (POP), (ILOAD1)]
 binarOpBC "double" Or = [(DLOAD0), (DCMP), (ILOAD0), (IFICMPNE 23), (POP), (POP), (SWAP), (POP), (DCMP), (ILOAD0), (IFICMPNE 9), (POP), (POP), (POP), (POP), (ILOAD1), (JA 6), (POP), (POP), (POP), (POP), (POP), (ILOAD0)]
 
 --Auxiliary function. Returns resulting type of binary operation.
 binarBCType :: Binar -> Type -> Type -> Type
 binarBCType _ "int" "int" = "int"
-binarBCType Mod _ _ = error ("")
+binarBCType Mod _ _ = error ("Attempt to use Mod operation with double variable.")
+binarBCType AndB _ _ = error ("Attempt to use Bitwise And with double variable.")
+binarBCType OrB _ _ = error ("Attempt to use Bitwise Or with double variable.")
 binarBCType bin _ _ = if (bin == Sum || bin == Sub || bin == Mult || bin == Div)
 	then "double"
 	else "int"

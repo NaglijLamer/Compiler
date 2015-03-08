@@ -1,6 +1,7 @@
 
 module Printer
 (
+	mainPrinter
 ) where
 
 import Parser
@@ -14,9 +15,9 @@ import Data.Word
 import Data.Binary
 import qualified Data.List as List
 
-
---mainPrinter ::
---mainPrinter = 
+--Main printer function.
+mainPrinter :: Program -> L.ByteString 
+mainPrinter pr = runPut $ createBinary $ createFile pr
 
 --Test main Function.
 main = do { c <- Prelude.getContents
@@ -174,7 +175,7 @@ constToBS cm = convertStr (List.sortBy compConst (Map.toList cm)) [] 0
 compConst :: (String, Int) -> (String, Int) -> Ordering
 compConst (str1, i1) (str2, i2) = compare i1 i2
 
---Convert list of pairs (String, Int) to list of C-srtyle ByteStrings and calculate their size.
+--Convert list of pairs (String, Int) to list of C-style ByteStrings and calculate their size.
 convertStr :: [(String, Int)] -> [ByteString] -> Int -> ([ByteString], Int)
 convertStr [] bsl num = (bsl, num)
 convertStr (s:l) bls num = convertStr l (bls ++ [pack((fst s) ++ "\0")]) (num + List.length(fst s) + 1)

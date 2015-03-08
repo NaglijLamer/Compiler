@@ -43,7 +43,7 @@ languageDef =
 					, "print"
 					]
 		, Token.reservedOpNames = [ "+", "-", "*", "/", "=", "!=", "<=", ">=", "<", ">", "!", "||", "&&"
-					, "+=", "-=", "*=", "/=", "%", "%=", "&=", "|="
+					, "+=", "-=", "*=", "/=", "%", "%=", "&=", "|=", "|", "&"
 					]
 		}
 lexer = Token.makeTokenParser languageDef
@@ -65,7 +65,7 @@ type Type = String
 type TypeF = String
 data Val = N Name | I Int deriving (Show)
 data Unar = Neg | Not deriving (Show)
-data Binar =  And | Or | Eq | Gt | Lw | Gte | Lwe | Neq | Sum | Sub | Mult | Div | Mod deriving (Show)
+data Binar =  And | Or | AndB | OrB | Eq | Gt | Lw | Gte | Lwe | Neq | Sum | Sub | Mult | Div | Mod deriving (Show)
 instance Eq (Binar) where
 	Sum == Sum = True
 	Sub == Sub = True
@@ -80,6 +80,8 @@ instance Eq (Binar) where
 	Gte == Gte = True
 	And == And = True
 	Or == Or = True
+	AndB == AndB = True
+	OrB == OrB = True
 	_ == _ = False
 data Expression = UnarExpr Unar Expression
 		| BinaryExpr Binar Expression Expression
@@ -131,7 +133,7 @@ assignmentParser :: CharParser () Statement
 assignmentParser = nameParser >>= (\x -> (assignmentTypeParser x >>= (\y -> sem >> return (Assignment x y))) <|> (paren (cArgsParser) >>= (\y -> sem >> return (FunctionCall x y))))
 
 assignmentTypeParser :: Name -> CharParser () Expression
-assignmentTypeParser name = (reservOp "=" *> expressionParser <* whiteSpaces) <|> (opAssignment "+=" Sum) <|> (opAssignment "-=" Sub) <|> (opAssignment "*=" Mult) <|> (opAssignment "/=" Div) <|> (opAssignment "&=" And) <|> (opAssignment "|=" Or) <|> (opAssignment "%=" Mod) 
+assignmentTypeParser name = (reservOp "=" *> expressionParser <* whiteSpaces) <|> (opAssignment "+=" Sum) <|> (opAssignment "-=" Sub) <|> (opAssignment "*=" Mult) <|> (opAssignment "/=" Div) <|> (opAssignment "&=" AndB) <|> (opAssignment "|=" OrB) <|> (opAssignment "%=" Mod) 
 	where opAssignment tp op = BinaryExpr <$> (reservOp tp *> pure op) <*> (pure (Ident name) :: CharParser () Expression) <*> expressionParser <* whiteSpaces
 
 printParser :: CharParser () Statement
@@ -183,17 +185,20 @@ numberParser = (++) <$> (many1 digit) <*> (option "" $ try((:) <$> char '.' <*> 
 
 stringParser :: CharParser () String
 --Maybe, that's nice.
-stringParser = between (char '\'') (char '\'') (many (noneOf "\'"))
---stringParser = stringLit
+--stringParser = between (char '\'') (char '\'') (many (noneOf "\'"))
+stringParser = stringLit
 
 -- Parser for Expressions
 unarOp op expr = Prefix (try (whiteSpaces >> string op >> whiteSpaces) >> return (UnarExpr expr))
 binaryOp op expr = Infix (try (whiteSpaces >> string op >> whiteSpaces) >> return (BinaryExpr expr)) AssocLeft 
+binaryBitOp op expr = Infix (try (whiteSpaces >> string op >> notFollowedBy (string op) >> whiteSpaces) >> return (BinaryExpr expr)) AssocLeft
 operators = 	[	[unarOp "-" Neg, unarOp "!" Not],
 			[binaryOp "*" Mult, binaryOp "/" Div, binaryOp "%" Mod],
 			[binaryOp "+" Sum, binaryOp "-" Sub],
 			[binaryOp "<=" Lwe, binaryOp ">=" Gte, binaryOp "<" Lw, binaryOp ">" Gt],
 			[binaryOp "==" Eq, binaryOp "!=" Neq],
+			[binaryBitOp "&" AndB],
+			[binaryBitOp "|" OrB],
 			[binaryOp "&&" And],
 			[binaryOp "||" Or]
 		]
