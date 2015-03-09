@@ -1,6 +1,6 @@
 
-module Compiler
-()where
+module Main
+(main)where
 
 import Parser
 import Translator
